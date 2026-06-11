@@ -1,0 +1,102 @@
+# ============================================================================
+#  Servidor pessoal do Mac (Apple Silicon M2) — "tudo em todo lugar"
+# ----------------------------------------------------------------------------
+#  Sobe 3 serviços, todos com imagem nativa arm64:
+#    - Nextcloud  -> arquivos, notas, agenda e contatos       (porta 8080)
+#    - Vaultwarden-> senhas (compatível com app Bitwarden)     (porta 8222)
+#    - Jellyfin   -> música, vídeo e fotos em streaming        (porta 8096)
+#
+#  Você acessa de qualquer aparelho pela rede do Tailscale, usando:
+#      http://<nome-ou-ip-tailscale-do-mac>:<porta>
+#
+#  Comandos:
+#    docker compose up -d        # liga tudo
+#    docker compose down         # desliga tudo
+#    docker compose logs -f      # ver o que está acontecendo
+# ============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Banco de dados do Nextcloud
+  # ---------------------------------------------------------------------------
+  nextcloud-db:
+    image: mariadb:11
+    container_name: nextcloud-db
+    restart: unless-stopped
+    command: --transaction-isolation=READ-COMMITTED --log-bin=binlog --binlog-format=ROW
+    volumes:
+      - ./data/nextcloud-db:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+
+  # Cache do Nextcloud (deixa tudo mais rápido)
+  nextcloud-redis:
+    image: redis:7-alpine
+    container_name: nextcloud-redis
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Nextcloud — arquivos, notas (app Notes), calendário e contatos
+  # ---------------------------------------------------------------------------
+  nextcloud:
+    image: nextcloud:30-apache
+    container_name: nextcloud
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - nextcloud-db
+      - nextcloud-redis
+    volumes:
+      - ./data/nextcloud:/var/www/html          # app + dados do Nextcloud
+      # Opcional: aponte uma pasta grande do Mac para os arquivos do usuário
+      # - /Users/SEU_USUARIO/NextcloudData:/var/www/html/data
+    environment:
+      MYSQL_HOST: nextcloud-db
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      REDIS_HOST: nextcloud-redis
+      NEXTCLOUD_ADMIN_USER: ${NC_ADMIN_USER}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NC_ADMIN_PASSWORD}
+      # IMPORTANTE: coloque aqui o nome Tailscale do seu Mac (ex.: macbook-m2)
+      # e/ou o IP 100.x.x.x. Pode listar vários separados por espaço.
+      NEXTCLOUD_TRUSTED_DOMAINS: "localhost ${TAILSCALE_HOSTNAME} ${TAILSCALE_IP}"
+      OVERWRITEPROTOCOL: http
+
+  # ---------------------------------------------------------------------------
+  # Vaultwarden — cofre de senhas (use o app/extensão Bitwarden)
+  # ---------------------------------------------------------------------------
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    ports:
+      - "8222:80"
+    volumes:
+      - ./data/vaultwarden:/data
+    environment:
+      # Deixa criar a 1ª conta; depois recomendamos desativar (ver GUIA.md)
+      SIGNUPS_ALLOWED: "true"
+      # Token do painel de administração (gere um valor longo e secreto)
+      ADMIN_TOKEN: ${VW_ADMIN_TOKEN}
+
+  # ---------------------------------------------------------------------------
+  # Jellyfin — sua biblioteca de mídia (música, vídeo, fotos) em streaming
+  # ---------------------------------------------------------------------------
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    restart: unless-stopped
+    ports:
+      - "8096:8096"
+    volumes:
+      - ./data/jellyfin/config:/config
+      - ./data/jellyfin/cache:/cache
+      # Aponte aqui suas pastas de mídia do Mac (ajuste o caminho):
+      - /Users/SEU_USUARIO/Music:/media/musica:ro
+      - /Users/SEU_USUARIO/Movies:/media/videos:ro
+      - /Users/SEU_USUARIO/Pictures:/media/fotos:ro
